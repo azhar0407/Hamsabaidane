@@ -3,7 +3,7 @@ import {
   Menu, X, LayoutDashboard, FilePlus, ClipboardList, 
   Trash2, Save, Calculator, AlertCircle, Package, User, 
   Wallet, Users, Pencil, ChevronDown, ChevronUp, Truck, 
-  LogOut, Settings, Lock, Mail
+  LogOut, Settings, Lock, Mail, LogIn
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -25,8 +25,6 @@ const firebaseConfig = {
   measurementId: "G-BBZMYJ2B8D"
 };
 
-const appId = 'cv-hamsabaidane';
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -44,9 +42,9 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [records, setRecords] = useState([]);
   const [pricing, setPricing] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [activeMenu, setActiveMenu] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isLoadingData, setIsLoadingData] = useState(true);
   
   const [editingId, setEditingId] = useState(null);
   const [isNewPekerja, setIsNewPekerja] = useState(false);
@@ -68,58 +66,50 @@ export default function App() {
     { nama: '5 Proses', harga: 417 },
   ];
 
-  // --- AUTHENTICATION LISTENER ---
+  // --- 1. PANTAU STATUS LOGIN (TIDAK LOGOUT SAAT REFRESH) ---
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      // Auto-kick jika terdeteksi login Anonim bawaan lama
-      if (currentUser && currentUser.isAnonymous) {
-        signOut(auth);
-      } else {
-        setUser(currentUser);
-        if (!currentUser) setLoading(false);
+      setUser(currentUser);
+      // Jika user yang sudah login mengakses halaman login, kembalikan ke dashboard
+      if (currentUser && activeMenu === 'login') {
+        setActiveMenu('dashboard');
       }
     });
     return () => unsubscribeAuth();
-  }, []);
+  }, [activeMenu]);
 
-  // --- DATABASE LISTENER (DILENGKAPI ANTI-HANG / AUTO-KICK) ---
+  // --- 2. AMBIL DATA PUBLIK (TIDAK PERLU LOGIN UNTUK MELIHAT) ---
   useEffect(() => {
-    if (!user) return;
-    setLoading(true);
-    
-    const recordsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3');
+    // Menggunakan path Global untuk Perusahaan
+    const recordsRef = collection(db, 'hamsabaidane_produksi');
     const unsubRecords = onSnapshot(recordsRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       data.sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime() || b.timestamp - a.timestamp);
       setRecords(data);
+      setIsLoadingData(false);
     }, (error) => {
-      // JIKA DATABASE MENOLAK AKSES (MISAL AKUN DIHAPUS), PAKSA LOGOUT
-      console.error("Akses Ditolak:", error);
-      signOut(auth);
+      console.error("Error mengambil data:", error);
+      setIsLoadingData(false);
     });
 
-    const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'pricing');
+    const settingsRef = doc(db, 'hamsabaidane_settings', 'pricing');
     const unsubPricing = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists() && docSnap.data().list) {
         setPricing(docSnap.data().list);
       } else {
         setPricing(defaultPricing);
       }
-      setLoading(false);
-    }, (error) => {
-      // JIKA DATABASE MENOLAK AKSES, PAKSA LOGOUT
-      console.error("Akses Ditolak:", error);
-      setLoading(false);
-      signOut(auth);
     });
 
     return () => { unsubRecords(); unsubPricing(); };
-  }, [user]);
+  }, []); // <-- Array kosong artinya dipanggil otomatis saat web dibuka, tanpa peduli login/tidak.
 
+  // --- DERIVED DATA ---
   const uniqueWorkers = useMemo(() => [...new Set(records.map(r => r.namaPekerja).filter(Boolean))].sort(), [records]);
   const uniqueMerek = useMemo(() => [...new Set(records.map(r => r.merekBarang).filter(Boolean))].sort(), [records]);
   const deliveryRecords = useMemo(() => records.filter(r => r.deliveryBox && r.deliveryBox > 0), [records]);
 
+  // --- HANDLERS ADMIN ---
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => {
@@ -151,7 +141,7 @@ export default function App() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user) return alert("Hanya Admin yang bisa menyimpan data!");
     if (!formData.namaPekerja || !formData.jenisPekerjaan) return alert("Nama pekerja dan jenis pekerjaan wajib diisi!");
 
     setIsSubmitting(true);
@@ -165,8 +155,8 @@ export default function App() {
         timestamp: editingId ? (records.find(r => r.id === editingId)?.timestamp || Date.now()) : Date.now()
       };
 
-      if (editingId) await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3', editingId), payload);
-      else await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3'), payload);
+      if (editingId) await updateDoc(doc(db, 'hamsabaidane_produksi', editingId), payload);
+      else await addDoc(collection(db, 'hamsabaidane_produksi'), payload);
       
       setFormData(initialFormState); setEditingId(null); setIsNewPekerja(false); setIsNewMerek(false);
       setActiveMenu(payload.deliveryBox > 0 ? 'delivery' : 'workers');
@@ -178,13 +168,17 @@ export default function App() {
   };
 
   const handleDelete = async (id) => {
+    if (!user) return alert("Hanya Admin yang bisa menghapus data!");
     if (confirm("Yakin ingin menghapus data ini?")) {
-      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3', id));
+      await deleteDoc(doc(db, 'hamsabaidane_produksi', id));
     }
   };
 
   const handleLogout = async () => {
-    if (confirm("Keluar dari sistem admin?")) await signOut(auth);
+    if (confirm("Keluar dari sistem admin?")) {
+      await signOut(auth);
+      setActiveMenu('dashboard');
+    }
   };
 
   const summary = useMemo(() => {
@@ -212,70 +206,63 @@ export default function App() {
   }, [records]);
 
 
-  // --- 1. LOGIN SCREEN ---
-  if (!loading && !user) {
-    const LoginScreen = () => {
-      const [email, setEmail] = useState('');
-      const [pass, setPass] = useState('');
-      const [authLoading, setAuthLoading] = useState(false);
+  // --- VIEWS ---
 
-      const handleAuth = async (e) => {
-        e.preventDefault();
-        setAuthLoading(true);
-        try {
-          await signInWithEmailAndPassword(auth, email, pass);
-        } catch (error) {
-          alert("Gagal Login. Pastikan Email dan Password benar, atau akun sudah didaftarkan oleh Super Admin.");
-        } finally {
-          setAuthLoading(false);
-        }
-      };
+  const renderLogin = () => {
+    const [email, setEmail] = useState('');
+    const [pass, setPass] = useState('');
+    const [authLoading, setAuthLoading] = useState(false);
 
-      return (
-        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-          <div className="bg-white max-w-md w-full rounded-2xl shadow-xl overflow-hidden">
-            <div className="bg-blue-600 p-8 text-center">
-              <Package className="w-12 h-12 text-white mx-auto mb-3" />
-              <h1 className="text-2xl font-bold text-white tracking-wide">CV. Hamsabaidane</h1>
-              <p className="text-blue-100 mt-1">Portal Admin Resmi</p>
-            </div>
-            <form onSubmit={handleAuth} className="p-8 space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email Admin</label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 w-5 h-5 text-slate-400"/>
-                  <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="w-full pl-10 p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Masukkan email admin..." />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 w-5 h-5 text-slate-400"/>
-                  <input type="password" required value={pass} onChange={e=>setPass(e.target.value)} className="w-full pl-10 p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="••••••••" />
-                </div>
-              </div>
-              <button type="submit" disabled={authLoading} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition shadow-lg shadow-blue-200">
-                {authLoading ? 'Mengecek Akses...' : 'Masuk ke Sistem'}
-              </button>
-              <div className="text-center mt-6">
-                <p className="text-xs text-slate-400 flex items-center justify-center">
-                  <Lock className="w-3 h-3 mr-1" /> Sistem Terenkripsi (Private Access Only)
-                </p>
-              </div>
-            </form>
+    const handleAuth = async (e) => {
+      e.preventDefault();
+      setAuthLoading(true);
+      try {
+        await signInWithEmailAndPassword(auth, email, pass);
+        setActiveMenu('dashboard');
+      } catch (error) {
+        alert("Gagal Login. Pastikan Email dan Password benar.");
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    return (
+      <div className="max-w-md mx-auto mt-10 animate-in fade-in duration-300">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="bg-blue-600 p-8 text-center">
+            <Lock className="w-12 h-12 text-white mx-auto mb-3 opacity-90" />
+            <h1 className="text-xl font-bold text-white tracking-wide">Area Khusus Admin</h1>
+            <p className="text-blue-100 mt-1 text-sm">Silakan login untuk input dan kelola data</p>
           </div>
+          <form onSubmit={handleAuth} className="p-8 space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Email Admin</label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-3 w-5 h-5 text-slate-400"/>
+                <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="w-full pl-10 p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="admin@hamsabaidane.com" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-3 w-5 h-5 text-slate-400"/>
+                <input type="password" required value={pass} onChange={e=>setPass(e.target.value)} className="w-full pl-10 p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="••••••••" />
+              </div>
+            </div>
+            <button type="submit" disabled={authLoading} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition shadow-lg shadow-blue-200">
+              {authLoading ? 'Memeriksa...' : 'Masuk ke Sistem'}
+            </button>
+          </form>
         </div>
-      );
-    }
-    return <LoginScreen />;
-  }
+      </div>
+    );
+  };
 
-  // --- 2. SETTINGS SCREEN ---
   const renderSettings = () => {
     const handleSavePricing = async (e) => {
       e.preventDefault();
       try {
-        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'pricing'), { list: pricing });
+        await setDoc(doc(db, 'hamsabaidane_settings', 'pricing'), { list: pricing });
         alert("Pengaturan harga berhasil disimpan permanen!");
       } catch (error) { alert("Gagal menyimpan pengaturan."); }
     };
@@ -320,27 +307,45 @@ export default function App() {
         </div>
         <button className="md:hidden text-gray-300 hover:text-white" onClick={() => setIsMobileMenuOpen(false)}><X className="w-6 h-6" /></button>
       </div>
+      
       <div className="p-4 flex flex-col space-y-2 flex-1 overflow-y-auto">
+        {/* MENU PUBLIK */}
         <button onClick={() => { setActiveMenu('dashboard'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><LayoutDashboard className="w-5 h-5" /><span>Dashboard</span></button>
-        <button onClick={() => { setActiveMenu('input'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'input' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><FilePlus className="w-5 h-5" /><span>{editingId ? 'Edit Data' : 'Input Setoran'}</span></button>
-        <button onClick={() => { setActiveMenu('workers'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'workers' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Users className="w-5 h-5" /><span>Rekap Pekerja</span></button>
-        <button onClick={() => { setActiveMenu('delivery'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'delivery' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Truck className="w-5 h-5" /><span>Data Delivery</span></button>
-        <button onClick={() => { setActiveMenu('list'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'list' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><ClipboardList className="w-5 h-5" /><span>Riwayat Transaksi</span></button>
         
-        <div className="my-2 border-t border-slate-700"></div>
-        <button onClick={() => { setActiveMenu('settings'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'settings' ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Settings className="w-5 h-5" /><span>Pengaturan Harga</span></button>
-        <button onClick={handleLogout} className="flex items-center space-x-3 p-3 rounded-lg transition-colors text-rose-400 hover:bg-rose-950 hover:text-rose-300"><LogOut className="w-5 h-5" /><span>Keluar Admin</span></button>
+        {!user && (
+          <button onClick={() => { setActiveMenu('login'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'login' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><LogIn className="w-5 h-5" /><span>Login Admin</span></button>
+        )}
+
+        {/* MENU ADMIN (HANYA MUNCUL JIKA SUDAH LOGIN) */}
+        {user && (
+          <>
+            <div className="my-2 border-t border-slate-700"></div>
+            <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold mb-1 ml-2">Area Admin</p>
+            <button onClick={() => { setActiveMenu('input'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'input' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><FilePlus className="w-5 h-5" /><span>{editingId ? 'Edit Data' : 'Input Setoran'}</span></button>
+            <button onClick={() => { setActiveMenu('workers'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'workers' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Users className="w-5 h-5" /><span>Rekap Pekerja</span></button>
+            <button onClick={() => { setActiveMenu('delivery'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'delivery' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Truck className="w-5 h-5" /><span>Data Delivery</span></button>
+            <button onClick={() => { setActiveMenu('list'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'list' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><ClipboardList className="w-5 h-5" /><span>Riwayat Transaksi</span></button>
+            <button onClick={() => { setActiveMenu('settings'); setIsMobileMenuOpen(false); }} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${activeMenu === 'settings' ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Settings className="w-5 h-5" /><span>Pengaturan Harga</span></button>
+            <button onClick={handleLogout} className="flex items-center space-x-3 p-3 rounded-lg transition-colors text-rose-400 hover:bg-rose-950 hover:text-rose-300"><LogOut className="w-5 h-5" /><span>Keluar Admin</span></button>
+          </>
+        )}
       </div>
+      
       <div className="p-4 border-t border-slate-700 text-center text-xs text-slate-500">
         <p className="font-medium tracking-wide text-slate-400">Made with ❤️ by Ajam</p>
-        <p className="mt-1 truncate">{user.email}</p>
+        {user && <p className="mt-1 truncate">Admin: {user.email}</p>}
+        {!user && <p className="mt-1">Mode Publik</p>}
       </div>
     </div>
   );
 
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <h2 className="text-2xl font-bold text-slate-800">Dashboard CV. Hamsabaidane</h2>
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-slate-800">Dashboard CV. Hamsabaidane</h2>
+        {!user && <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full border border-blue-200">Mode Publik</span>}
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center space-x-4">
           <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl"><Package className="w-8 h-8" /></div>
@@ -355,10 +360,20 @@ export default function App() {
           <div><p className="text-sm text-slate-500 font-medium">Total Sisa Hutang Upah</p><h3 className="text-xl font-bold text-rose-600">{formatRupiah(summary.sisaHutang)}</h3></div>
         </div>
       </div>
+      
+      {!user && (
+        <div className="bg-blue-50 border border-blue-100 p-6 rounded-2xl text-center">
+          <Lock className="w-10 h-10 text-blue-300 mx-auto mb-3" />
+          <h3 className="text-lg font-bold text-blue-800">Detail Disembunyikan</h3>
+          <p className="text-blue-600 mt-1">Hanya Admin yang dapat melihat rincian pekerja dan menginput data baru.</p>
+          <button onClick={() => setActiveMenu('login')} className="mt-4 bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded-xl transition">Login Sekarang</button>
+        </div>
+      )}
     </div>
   );
 
   const renderInput = () => {
+    if (!user) return null; // Keamanan ganda
     const calculatedTotal = (Number(formData.barangDisetor) || 0) * (Number(formData.hargaPerPcs) || 0);
     const calculatedSisa = calculatedTotal - (Number(formData.pembayaran) || 0);
 
@@ -469,151 +484,161 @@ export default function App() {
     );
   };
 
-  const renderWorkerSummary = () => (
-    <div className="space-y-4 animate-in fade-in duration-300">
-      <h2 className="text-2xl font-bold text-slate-800">Rekapitulasi Per Pekerja</h2>
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="text-xs text-slate-600 uppercase bg-slate-100 border-b">
-              <tr>
-                <th className="px-4 py-4 w-8"></th>
-                <th className="px-4 py-4">Nama Pekerja</th>
-                <th className="px-4 py-4 text-center">Total Setoran</th>
-                <th className="px-4 py-4 text-right">Total Upah Hak</th>
-                <th className="px-4 py-4 text-right">Telah Dibayar</th>
-                <th className="px-4 py-4 text-right bg-rose-50 text-rose-800">Sisa Hutang Upah</th>
-              </tr>
-            </thead>
-            <tbody>
-              {workerSummary.map((worker, i) => {
-                const sisaHutang = worker.totalHak - worker.totalDibayar;
-                const isExpanded = expandedWorker === worker.namaPekerja;
-                return (
-                  <React.Fragment key={i}>
-                    <tr onClick={() => setExpandedWorker(isExpanded ? null : worker.namaPekerja)} className={`border-b transition-colors cursor-pointer ${isExpanded ? 'bg-blue-50' : 'hover:bg-slate-50'}`}>
-                      <td className="px-4 py-3 text-slate-400">{isExpanded ? <ChevronUp className="w-5 h-5"/> : <ChevronDown className="w-5 h-5"/>}</td>
-                      <td className="px-4 py-3 font-bold text-slate-800">{worker.namaPekerja}</td>
-                      <td className="px-4 py-3 text-center font-bold text-emerald-600 bg-emerald-50/20">{worker.totalDisetor} pcs</td>
-                      <td className="px-4 py-3 text-right text-slate-600">{formatRupiah(worker.totalHak)}</td>
-                      <td className="px-4 py-3 text-right text-emerald-600">{formatRupiah(worker.totalDibayar)}</td>
-                      <td className={`px-4 py-3 text-right font-bold bg-rose-50/50 ${sisaHutang > 0 ? 'text-rose-600' : 'text-slate-500'}`}>{formatRupiah(sisaHutang)}</td>
-                    </tr>
-                    {isExpanded && (
-                      <tr className="bg-slate-50/80 border-b">
-                        <td colSpan="6" className="px-8 py-4">
-                          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-inner">
-                            <table className="w-full text-xs text-left">
-                              <thead className="text-slate-500 bg-slate-50 border-b">
-                                <tr>
-                                  <th className="px-3 py-2">Tgl</th>
-                                  <th className="px-3 py-2">Pekerjaan</th>
-                                  <th className="px-3 py-2">Merek</th>
-                                  <th className="px-3 py-2 text-center">Setor</th>
-                                  <th className="px-3 py-2 text-right">Harga</th>
-                                  <th className="px-3 py-2 text-right">Bayar</th>
-                                  <th className="px-3 py-2 text-center">Aksi</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {worker.transaksi.map(t => (
-                                  <tr key={t.id} className="border-b last:border-0 hover:bg-slate-50">
-                                    <td className="px-3 py-2">{formatDate(t.tanggal)}</td>
-                                    <td className="px-3 py-2 font-medium">{t.jenisPekerjaan}</td>
-                                    <td className="px-3 py-2">{t.merekBarang}</td>
-                                    <td className="px-3 py-2 text-center text-emerald-600 font-bold">{t.barangDisetor}</td>
-                                    <td className="px-3 py-2 text-right text-slate-500">{formatRupiah(t.hargaPerPcs)}</td>
-                                    <td className="px-3 py-2 text-right text-slate-600">{formatRupiah(t.pembayaran)}</td>
-                                    <td className="px-3 py-2 text-center flex justify-center space-x-1">
-                                      <button onClick={() => handleEdit(t)} className="p-1.5 text-blue-500 hover:bg-blue-100 rounded" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                                      <button onClick={() => handleDelete(t.id)} className="p-1.5 text-rose-500 hover:bg-rose-100 rounded" title="Hapus"><Trash2 className="w-3.5 h-3.5" /></button>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </td>
+  const renderWorkerSummary = () => {
+    if (!user) return null;
+    return (
+      <div className="space-y-4 animate-in fade-in duration-300">
+        <h2 className="text-2xl font-bold text-slate-800">Rekapitulasi Per Pekerja</h2>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-slate-600 uppercase bg-slate-100 border-b">
+                <tr>
+                  <th className="px-4 py-4 w-8"></th>
+                  <th className="px-4 py-4">Nama Pekerja</th>
+                  <th className="px-4 py-4 text-center">Total Setoran</th>
+                  <th className="px-4 py-4 text-right">Total Upah Hak</th>
+                  <th className="px-4 py-4 text-right">Telah Dibayar</th>
+                  <th className="px-4 py-4 text-right bg-rose-50 text-rose-800">Sisa Hutang Upah</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workerSummary.map((worker, i) => {
+                  const sisaHutang = worker.totalHak - worker.totalDibayar;
+                  const isExpanded = expandedWorker === worker.namaPekerja;
+                  return (
+                    <React.Fragment key={i}>
+                      <tr onClick={() => setExpandedWorker(isExpanded ? null : worker.namaPekerja)} className={`border-b transition-colors cursor-pointer ${isExpanded ? 'bg-blue-50' : 'hover:bg-slate-50'}`}>
+                        <td className="px-4 py-3 text-slate-400">{isExpanded ? <ChevronUp className="w-5 h-5"/> : <ChevronDown className="w-5 h-5"/>}</td>
+                        <td className="px-4 py-3 font-bold text-slate-800">{worker.namaPekerja}</td>
+                        <td className="px-4 py-3 text-center font-bold text-emerald-600 bg-emerald-50/20">{worker.totalDisetor} pcs</td>
+                        <td className="px-4 py-3 text-right text-slate-600">{formatRupiah(worker.totalHak)}</td>
+                        <td className="px-4 py-3 text-right text-emerald-600">{formatRupiah(worker.totalDibayar)}</td>
+                        <td className={`px-4 py-3 text-right font-bold bg-rose-50/50 ${sisaHutang > 0 ? 'text-rose-600' : 'text-slate-500'}`}>{formatRupiah(sisaHutang)}</td>
                       </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+                      {isExpanded && (
+                        <tr className="bg-slate-50/80 border-b">
+                          <td colSpan="6" className="px-8 py-4">
+                            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-inner">
+                              <table className="w-full text-xs text-left">
+                                <thead className="text-slate-500 bg-slate-50 border-b">
+                                  <tr>
+                                    <th className="px-3 py-2">Tgl</th>
+                                    <th className="px-3 py-2">Pekerjaan</th>
+                                    <th className="px-3 py-2">Merek</th>
+                                    <th className="px-3 py-2 text-center">Setor</th>
+                                    <th className="px-3 py-2 text-right">Harga</th>
+                                    <th className="px-3 py-2 text-right">Bayar</th>
+                                    <th className="px-3 py-2 text-center">Aksi</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {worker.transaksi.map(t => (
+                                    <tr key={t.id} className="border-b last:border-0 hover:bg-slate-50">
+                                      <td className="px-3 py-2">{formatDate(t.tanggal)}</td>
+                                      <td className="px-3 py-2 font-medium">{t.jenisPekerjaan}</td>
+                                      <td className="px-3 py-2">{t.merekBarang}</td>
+                                      <td className="px-3 py-2 text-center text-emerald-600 font-bold">{t.barangDisetor}</td>
+                                      <td className="px-3 py-2 text-right text-slate-500">{formatRupiah(t.hargaPerPcs)}</td>
+                                      <td className="px-3 py-2 text-right text-slate-600">{formatRupiah(t.pembayaran)}</td>
+                                      <td className="px-3 py-2 text-center flex justify-center space-x-1">
+                                        <button onClick={() => handleEdit(t)} className="p-1.5 text-blue-500 hover:bg-blue-100 rounded" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                                        <button onClick={() => handleDelete(t.id)} className="p-1.5 text-rose-500 hover:bg-rose-100 rounded" title="Hapus"><Trash2 className="w-3.5 h-3.5" /></button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  const renderDelivery = () => (
-    <div className="space-y-4 animate-in fade-in duration-300">
-      <h2 className="text-2xl font-bold text-slate-800 mb-6">Rekap Delivery (Pengiriman)</h2>
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="text-xs text-slate-600 uppercase bg-blue-50 border-b">
-              <tr>
-                <th className="px-4 py-4">Tgl Kirim</th>
-                <th className="px-4 py-4">Pekerjaan</th>
-                <th className="px-4 py-4">Merek</th>
-                <th className="px-4 py-4 text-center font-bold text-blue-800">Jumlah Box</th>
-              </tr>
-            </thead>
-            <tbody>
-              {deliveryRecords.map((r) => (
-                <tr key={r.id} className="border-b hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 font-medium text-slate-800">{formatDate(r.tanggal)}</td>
-                  <td className="px-4 py-3">{r.jenisPekerjaan}</td>
-                  <td className="px-4 py-3">{r.merekBarang}</td>
-                  <td className="px-4 py-3 text-center font-bold text-blue-600 text-lg bg-blue-50/30">{r.deliveryBox}</td>
+  const renderDelivery = () => {
+    if (!user) return null;
+    return (
+      <div className="space-y-4 animate-in fade-in duration-300">
+        <h2 className="text-2xl font-bold text-slate-800 mb-6">Rekap Delivery (Pengiriman)</h2>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-slate-600 uppercase bg-blue-50 border-b">
+                <tr>
+                  <th className="px-4 py-4">Tgl Kirim</th>
+                  <th className="px-4 py-4">Pekerjaan</th>
+                  <th className="px-4 py-4">Merek</th>
+                  <th className="px-4 py-4 text-center font-bold text-blue-800">Jumlah Box</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {deliveryRecords.map((r) => (
+                  <tr key={r.id} className="border-b hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 font-medium text-slate-800">{formatDate(r.tanggal)}</td>
+                    <td className="px-4 py-3">{r.jenisPekerjaan}</td>
+                    <td className="px-4 py-3">{r.merekBarang}</td>
+                    <td className="px-4 py-3 text-center font-bold text-blue-600 text-lg bg-blue-50/30">{r.deliveryBox}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  const renderList = () => (
-    <div className="space-y-4 animate-in fade-in duration-300">
-      <h2 className="text-2xl font-bold text-slate-800 mb-6">Riwayat Semua Transaksi</h2>
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="text-xs text-slate-600 uppercase bg-slate-100 border-b">
-              <tr>
-                <th className="px-4 py-4">Tanggal</th>
-                <th className="px-4 py-4">Pekerja</th>
-                <th className="px-4 py-4">Merek</th>
-                <th className="px-4 py-4 text-center text-emerald-700">Setoran</th>
-                <th className="px-4 py-4 text-right text-rose-700">Dibayar</th>
-                <th className="px-4 py-4 text-center">Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {records.map((r) => (
-                <tr key={r.id} className="border-b hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.tanggal)}</td>
-                  <td className="px-4 py-3 font-semibold text-slate-800">{r.namaPekerja} <br/><span className="text-xs font-normal text-slate-500">{r.jenisPekerjaan}</span></td>
-                  <td className="px-4 py-3">{r.merekBarang}</td>
-                  <td className="px-4 py-3 text-center font-bold text-emerald-600 bg-emerald-50/20">{r.barangDisetor || '-'}</td>
-                  <td className="px-4 py-3 text-right font-medium text-slate-700">{formatRupiah(r.pembayaran)}</td>
-                  <td className="px-4 py-3 text-center flex justify-center space-x-2 mt-2">
-                    <button onClick={() => handleEdit(r)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Pencil className="w-4 h-4" /></button>
-                    <button onClick={() => handleDelete(r.id)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 className="w-4 h-4" /></button>
-                  </td>
+  const renderList = () => {
+    if (!user) return null;
+    return (
+      <div className="space-y-4 animate-in fade-in duration-300">
+        <h2 className="text-2xl font-bold text-slate-800 mb-6">Riwayat Semua Transaksi</h2>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-slate-600 uppercase bg-slate-100 border-b">
+                <tr>
+                  <th className="px-4 py-4">Tanggal</th>
+                  <th className="px-4 py-4">Pekerja</th>
+                  <th className="px-4 py-4">Merek</th>
+                  <th className="px-4 py-4 text-center text-emerald-700">Setoran</th>
+                  <th className="px-4 py-4 text-right text-rose-700">Dibayar</th>
+                  <th className="px-4 py-4 text-center">Aksi</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {records.map((r) => (
+                  <tr key={r.id} className="border-b hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.tanggal)}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-800">{r.namaPekerja} <br/><span className="text-xs font-normal text-slate-500">{r.jenisPekerjaan}</span></td>
+                    <td className="px-4 py-3">{r.merekBarang}</td>
+                    <td className="px-4 py-3 text-center font-bold text-emerald-600 bg-emerald-50/20">{r.barangDisetor || '-'}</td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-700">{formatRupiah(r.pembayaran)}</td>
+                    <td className="px-4 py-3 text-center flex justify-center space-x-2 mt-2">
+                      <button onClick={() => handleEdit(r)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><Pencil className="w-4 h-4" /></button>
+                      <button onClick={() => handleDelete(r.id)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div></div>;
+  // --- TAMPILAN UTAMA ---
+  if (isLoadingData) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div></div>;
 
   return (
     <div className="min-h-screen bg-slate-50 flex overflow-hidden font-sans text-slate-800">
@@ -625,11 +650,14 @@ export default function App() {
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           {activeMenu === 'dashboard' && renderDashboard()}
-          {activeMenu === 'input' && renderInput()}
-          {activeMenu === 'workers' && renderWorkerSummary()}
-          {activeMenu === 'delivery' && renderDelivery()}
-          {activeMenu === 'list' && renderList()}
-          {activeMenu === 'settings' && renderSettings()}
+          {activeMenu === 'login' && !user && renderLogin()}
+          
+          {/* Rute Khusus Admin */}
+          {user && activeMenu === 'input' && renderInput()}
+          {user && activeMenu === 'workers' && renderWorkerSummary()}
+          {user && activeMenu === 'delivery' && renderDelivery()}
+          {user && activeMenu === 'list' && renderList()}
+          {user && activeMenu === 'settings' && renderSettings()}
         </main>
       </div>
     </div>
