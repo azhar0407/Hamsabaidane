@@ -663,11 +663,3 @@ export default function App() {
     </div>
   );
 }
-```eof
-
-### TAHAP 3: Upload kembali ke Vercel
-Buka layar hitam CMD di laptop Anda (pastikan posisinya masih di folder `rekap-produksi`), lalu ketik perintah wajib ini:
-```cmd
-git add .
-git commit -m "Menambahkan Login Admin & Fitur Pengaturan Harga"
-git push origin main
