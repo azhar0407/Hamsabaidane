@@ -7,8 +7,7 @@ import {
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, 
-  signOut, onAuthStateChanged 
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged 
 } from 'firebase/auth';
 import { 
   getFirestore, collection, addDoc, onSnapshot, 
@@ -42,7 +41,6 @@ const formatDate = (dateString) => {
 };
 
 export default function App() {
-  // --- STATE ---
   const [user, setUser] = useState(null);
   const [records, setRecords] = useState([]);
   const [pricing, setPricing] = useState([]);
@@ -55,35 +53,31 @@ export default function App() {
   const [isNewMerek, setIsNewMerek] = useState(false);
   const [expandedWorker, setExpandedWorker] = useState(null);
 
-  // Form State
   const initialFormState = {
     tanggal: new Date().toISOString().split('T')[0],
-    namaPekerja: '',
-    jenisPekerjaan: '',
-    merekBarang: '',
-    barangDisetor: '',
-    hargaPerPcs: '',
-    pembayaran: '',
-    deliveryBox: '',
-    catatan: ''
+    namaPekerja: '', jenisPekerjaan: '', merekBarang: '',
+    barangDisetor: '', hargaPerPcs: '', pembayaran: '',
+    deliveryBox: '', catatan: ''
   };
   const [formData, setFormData] = useState(initialFormState);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Default Pricing (Jika belum diatur di database)
   const defaultPricing = [
-    { nama: '1 Proses', harga: 83 },
-    { nama: '2 Proses', harga: 167 },
-    { nama: '3 Proses', harga: 250 },
-    { nama: '4 Proses', harga: 333 },
+    { nama: '1 Proses', harga: 83 }, { nama: '2 Proses', harga: 167 },
+    { nama: '3 Proses', harga: 250 }, { nama: '4 Proses', harga: 333 },
     { nama: '5 Proses', harga: 417 },
   ];
 
   // --- AUTHENTICATION LISTENER ---
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      if (!currentUser) setLoading(false);
+      // Hapus otomatis jika masih tersangkut akun Anonymous versi lama
+      if (currentUser && currentUser.isAnonymous) {
+        signOut(auth);
+      } else {
+        setUser(currentUser);
+        if (!currentUser) setLoading(false);
+      }
     });
     return () => unsubscribeAuth();
   }, []);
@@ -91,9 +85,7 @@ export default function App() {
   // --- DATABASE LISTENER ---
   useEffect(() => {
     if (!user) return;
-
     setLoading(true);
-    // 1. Ambil Data Transaksi
     const recordsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3');
     const unsubRecords = onSnapshot(recordsRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -101,7 +93,6 @@ export default function App() {
       setRecords(data);
     });
 
-    // 2. Ambil Data Pengaturan Harga
     const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'pricing');
     const unsubPricing = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists() && docSnap.data().list) {
@@ -111,27 +102,20 @@ export default function App() {
       }
       setLoading(false);
     });
-
     return () => { unsubRecords(); unsubPricing(); };
   }, [user]);
 
-  // --- DERIVED DATA ---
   const uniqueWorkers = useMemo(() => [...new Set(records.map(r => r.namaPekerja).filter(Boolean))].sort(), [records]);
   const uniqueMerek = useMemo(() => [...new Set(records.map(r => r.merekBarang).filter(Boolean))].sort(), [records]);
   const deliveryRecords = useMemo(() => records.filter(r => r.deliveryBox && r.deliveryBox > 0), [records]);
 
-  // --- HANDLERS ---
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => {
       const newData = { ...prev, [name]: value };
-      
-      // AUTO HARGA saat Jenis Pekerjaan dipilih
       if (name === 'jenisPekerjaan') {
         const selectedPricing = pricing.find(p => p.nama === value);
-        if (selectedPricing) {
-          newData.hargaPerPcs = selectedPricing.harga;
-        }
+        if (selectedPricing) newData.hargaPerPcs = selectedPricing.harga;
       }
       return newData;
     });
@@ -139,28 +123,19 @@ export default function App() {
 
   const handleEdit = (record) => {
     setFormData({
-      tanggal: record.tanggal,
-      namaPekerja: record.namaPekerja,
-      jenisPekerjaan: record.jenisPekerjaan || '',
-      merekBarang: record.merekBarang || '',
-      barangDisetor: record.barangDisetor || '',
-      hargaPerPcs: record.hargaPerPcs || '',
-      pembayaran: record.pembayaran || '',
-      deliveryBox: record.deliveryBox || '',
+      tanggal: record.tanggal, namaPekerja: record.namaPekerja,
+      jenisPekerjaan: record.jenisPekerjaan || '', merekBarang: record.merekBarang || '',
+      barangDisetor: record.barangDisetor || '', hargaPerPcs: record.hargaPerPcs || '',
+      pembayaran: record.pembayaran || '', deliveryBox: record.deliveryBox || '',
       catatan: record.catatan || ''
     });
-    setEditingId(record.id);
-    setIsNewPekerja(false);
-    setIsNewMerek(false);
-    setActiveMenu('input');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setEditingId(record.id); setIsNewPekerja(false); setIsNewMerek(false);
+    setActiveMenu('input'); window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const cancelEdit = () => {
-    setFormData(initialFormState);
-    setEditingId(null);
-    setIsNewPekerja(false);
-    setIsNewMerek(false);
+    setFormData(initialFormState); setEditingId(null);
+    setIsNewPekerja(false); setIsNewMerek(false);
   };
 
   const handleSubmit = async (e) => {
@@ -171,26 +146,18 @@ export default function App() {
     setIsSubmitting(true);
     try {
       const payload = {
-        tanggal: formData.tanggal,
-        namaPekerja: formData.namaPekerja.trim(),
-        jenisPekerjaan: formData.jenisPekerjaan,
-        merekBarang: formData.merekBarang.trim(),
-        barangDisetor: Number(formData.barangDisetor) || 0,
-        hargaPerPcs: Number(formData.hargaPerPcs) || 0,
-        pembayaran: Number(formData.pembayaran) || 0,
-        deliveryBox: Number(formData.deliveryBox) || 0,
+        tanggal: formData.tanggal, namaPekerja: formData.namaPekerja.trim(),
+        jenisPekerjaan: formData.jenisPekerjaan, merekBarang: formData.merekBarang.trim(),
+        barangDisetor: Number(formData.barangDisetor) || 0, hargaPerPcs: Number(formData.hargaPerPcs) || 0,
+        pembayaran: Number(formData.pembayaran) || 0, deliveryBox: Number(formData.deliveryBox) || 0,
         catatan: formData.catatan || '',
         timestamp: editingId ? (records.find(r => r.id === editingId)?.timestamp || Date.now()) : Date.now()
       };
 
-      if (editingId) {
-        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3', editingId), payload);
-      } else {
-        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3'), payload);
-      }
+      if (editingId) await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3', editingId), payload);
+      else await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3'), payload);
       
-      setFormData(initialFormState);
-      setEditingId(null); setIsNewPekerja(false); setIsNewMerek(false);
+      setFormData(initialFormState); setEditingId(null); setIsNewPekerja(false); setIsNewMerek(false);
       setActiveMenu(payload.deliveryBox > 0 ? 'delivery' : 'workers');
     } catch (error) {
       console.error(error); alert("Gagal menyimpan data.");
@@ -206,10 +173,9 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    if (confirm("Keluar dari akun admin?")) await signOut(auth);
+    if (confirm("Keluar dari sistem admin?")) await signOut(auth);
   };
 
-  // --- SUMMARY CALCULATIONS ---
   const summary = useMemo(() => {
     let totalDisetor = 0, totalUangProduksi = 0, totalTelahDibayar = 0, totalDeliveryBox = 0;
     records.forEach(r => {
@@ -235,24 +201,20 @@ export default function App() {
   }, [records]);
 
 
-  // --- VIEWS ---
-
-  // 1. TAMPILAN LOGIN ADMIN
+  // --- 1. LOGIN SCREEN (TANPA TOMBOL DAFTAR) ---
   if (!loading && !user) {
     const LoginScreen = () => {
       const [email, setEmail] = useState('');
       const [pass, setPass] = useState('');
-      const [isLogin, setIsLogin] = useState(true);
       const [authLoading, setAuthLoading] = useState(false);
 
       const handleAuth = async (e) => {
         e.preventDefault();
         setAuthLoading(true);
         try {
-          if (isLogin) await signInWithEmailAndPassword(auth, email, pass);
-          else await createUserWithEmailAndPassword(auth, email, pass);
+          await signInWithEmailAndPassword(auth, email, pass);
         } catch (error) {
-          alert("Gagal: " + error.message);
+          alert("Gagal Login. Pastikan Email dan Password benar, atau akun sudah didaftarkan oleh Super Admin.");
         } finally {
           setAuthLoading(false);
         }
@@ -264,14 +226,14 @@ export default function App() {
             <div className="bg-blue-600 p-8 text-center">
               <Package className="w-12 h-12 text-white mx-auto mb-3" />
               <h1 className="text-2xl font-bold text-white tracking-wide">CV. Hamsabaidane</h1>
-              <p className="text-blue-100 mt-1">Sistem Rekapitulasi Produksi</p>
+              <p className="text-blue-100 mt-1">Portal Admin Resmi</p>
             </div>
             <form onSubmit={handleAuth} className="p-8 space-y-6">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Email Admin</label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-3 w-5 h-5 text-slate-400"/>
-                  <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="w-full pl-10 p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="admin@hamsabaidane.com" />
+                  <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="w-full pl-10 p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Masukkan email admin..." />
                 </div>
               </div>
               <div>
@@ -282,11 +244,13 @@ export default function App() {
                 </div>
               </div>
               <button type="submit" disabled={authLoading} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition shadow-lg shadow-blue-200">
-                {authLoading ? 'Memproses...' : (isLogin ? 'Masuk ke Sistem' : 'Buat Akun Baru')}
+                {authLoading ? 'Mengecek Akses...' : 'Masuk ke Sistem'}
               </button>
-              <p className="text-center text-sm text-slate-500 mt-4 cursor-pointer hover:text-blue-600" onClick={() => setIsLogin(!isLogin)}>
-                {isLogin ? 'Belum punya akun? Daftar di sini' : 'Sudah punya akun? Masuk di sini'}
-              </p>
+              <div className="text-center mt-6">
+                <p className="text-xs text-slate-400 flex items-center justify-center">
+                  <Lock className="w-3 h-3 mr-1" /> Sistem Terenkripsi (Private Access Only)
+                </p>
+              </div>
             </form>
           </div>
         </div>
@@ -295,16 +259,14 @@ export default function App() {
     return <LoginScreen />;
   }
 
-  // 2. TAMPILAN PENGATURAN HARGA
+  // --- 2. SETTINGS SCREEN ---
   const renderSettings = () => {
     const handleSavePricing = async (e) => {
       e.preventDefault();
       try {
         await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'pricing'), { list: pricing });
         alert("Pengaturan harga berhasil disimpan permanen!");
-      } catch (error) {
-        alert("Gagal menyimpan pengaturan.");
-      }
+      } catch (error) { alert("Gagal menyimpan pengaturan."); }
     };
 
     const updatePrice = (index, newPrice) => {
@@ -338,7 +300,6 @@ export default function App() {
       </div>
     );
   };
-
 
   const renderSidebar = () => (
     <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 flex flex-col`}>
