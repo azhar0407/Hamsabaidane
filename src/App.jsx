@@ -71,7 +71,7 @@ export default function App() {
   // --- AUTHENTICATION LISTENER ---
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      // Hapus otomatis jika masih tersangkut akun Anonymous versi lama
+      // Auto-kick jika terdeteksi login Anonim bawaan lama
       if (currentUser && currentUser.isAnonymous) {
         signOut(auth);
       } else {
@@ -82,15 +82,20 @@ export default function App() {
     return () => unsubscribeAuth();
   }, []);
 
-  // --- DATABASE LISTENER ---
+  // --- DATABASE LISTENER (DILENGKAPI ANTI-HANG / AUTO-KICK) ---
   useEffect(() => {
     if (!user) return;
     setLoading(true);
+    
     const recordsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'produksi_v3');
     const unsubRecords = onSnapshot(recordsRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       data.sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime() || b.timestamp - a.timestamp);
       setRecords(data);
+    }, (error) => {
+      // JIKA DATABASE MENOLAK AKSES (MISAL AKUN DIHAPUS), PAKSA LOGOUT
+      console.error("Akses Ditolak:", error);
+      signOut(auth);
     });
 
     const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'pricing');
@@ -101,7 +106,13 @@ export default function App() {
         setPricing(defaultPricing);
       }
       setLoading(false);
+    }, (error) => {
+      // JIKA DATABASE MENOLAK AKSES, PAKSA LOGOUT
+      console.error("Akses Ditolak:", error);
+      setLoading(false);
+      signOut(auth);
     });
+
     return () => { unsubRecords(); unsubPricing(); };
   }, [user]);
 
@@ -201,7 +212,7 @@ export default function App() {
   }, [records]);
 
 
-  // --- 1. LOGIN SCREEN (TANPA TOMBOL DAFTAR) ---
+  // --- 1. LOGIN SCREEN ---
   if (!loading && !user) {
     const LoginScreen = () => {
       const [email, setEmail] = useState('');
